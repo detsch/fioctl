@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
@@ -52,6 +53,7 @@ var (
 	ouNoApps               bool
 	ouAllowMultipleTargets bool
 	ouWave                 string
+	ouOstreeRepoSrc        string
 )
 
 func init() {
@@ -87,6 +89,8 @@ func init() {
 		"Skip fetching Target Apps")
 	offlineUpdateCmd.Flags().BoolVarP(&ouAllowMultipleTargets, "allow-multiple-targets", "", false,
 		"Allow multiple targets to be stored in the same <dst> directory")
+	offlineUpdateCmd.Flags().StringVarP(&ouOstreeRepoSrc, "ostree-repo-source", "", "",
+		"Path to the ostree repo to be used in the offline bundle")
 	offlineUpdateCmd.MarkFlagsMutuallyExclusive("tag", "wave")
 	offlineUpdateCmd.MarkFlagsMutuallyExclusive("prod", "wave")
 	initSignCmd(offlineUpdateCmd)
@@ -169,8 +173,13 @@ Notice that multiple targets in the same directory is only supported in LmP >= v
 		ti, err := getTargetInfo(targetCustomData)
 		subcommands.DieNotNil(err)
 
-		fmt.Printf("Downloading an ostree repo from the Target's OE build %d...\n", ti.ostreeVersion)
-		subcommands.DieNotNil(downloadOstree(factory, ti.ostreeVersion, ti.hardwareID, dstDir), "Failed to download Target's ostree repo:")
+		if ouOstreeRepoSrc != "" {
+			fmt.Printf("Copying local ostree repo from %s...\n", ouOstreeRepoSrc)
+			subcommands.DieNotNil(copyOstree(ouOstreeRepoSrc, dstDir+"/ostree_repo/"), "Failed to copy local ostree repo:")
+		} else {
+			fmt.Printf("Downloading an ostree repo from the Target's OE build %d...\n", ti.ostreeVersion)
+			subcommands.DieNotNil(downloadOstree(factory, ti.ostreeVersion, ti.hardwareID, dstDir), "Failed to download Target's ostree repo:")
+		}
 		if !ouNoApps {
 			if (len(ouWave) > 0 || ouProd) && ti.fetchedApps == nil {
 				// Get the specified target from the list of factory targets to obtain the "original" tag/branch that produced
@@ -364,6 +373,68 @@ func downloadTufRepo(factory string, target string, tag string, prod bool, wave 
 	}
 
 	return nil
+}
+
+func copyFile(src string, dst string) error {
+	var err error
+	var srcfd *os.File
+	var dstfd *os.File
+	var srcinfo os.FileInfo
+
+	if srcfd, err = os.Open(src); err != nil {
+		return err
+	}
+	defer srcfd.Close()
+
+	if dstfd, err = os.Create(dst); err != nil {
+		return err
+	}
+	defer dstfd.Close()
+
+	if _, err = io.Copy(dstfd, srcfd); err != nil {
+		return err
+	}
+	if srcinfo, err = os.Stat(src); err != nil {
+		return err
+	}
+	return os.Chmod(dst, srcinfo.Mode())
+}
+
+func copyRecursive(src string, dst string) error {
+	var err error
+	var fds []os.FileInfo
+	var srcinfo os.FileInfo
+
+	if srcinfo, err = os.Stat(src); err != nil {
+		return err
+	}
+
+	if err = os.MkdirAll(dst, srcinfo.Mode()); err != nil {
+		return err
+	}
+
+	if fds, err = ioutil.ReadDir(src); err != nil {
+		return err
+	}
+	for _, fd := range fds {
+		srcfp := path.Join(src, fd.Name())
+		dstfp := path.Join(dst, fd.Name())
+
+		if fd.IsDir() {
+			if err = copyRecursive(srcfp, dstfp); err != nil {
+				fmt.Println(err)
+			}
+		} else {
+			if err = copyFile(srcfp, dstfp); err != nil {
+				fmt.Println(err)
+			}
+		}
+	}
+	return nil
+}
+
+func copyOstree(srcDir string, dstDir string) error {
+	return copyRecursive(srcDir, dstDir)
 }
 
 func downloadOstree(factory string, targetVer int, hardwareID string, dstDir string) error {

@@ -185,6 +185,8 @@ func deriveTargets(factory string, hwIds map[string]interface{}, srcTag string, 
 		if err := customizeFunc(newTarget); err != nil {
 			return nil, err
 		}
+		newTarget.Custom.Arch = "x86_64"
+		newTarget.Custom.ImageFile = "lmp-base-console-image-intel-corei7-64.wic.gz"
 		newTargets[newTarget.Name()] = newTarget
 		fmt.Printf("%s\n", newTarget.Name())
 	}
